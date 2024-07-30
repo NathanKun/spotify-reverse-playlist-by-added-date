@@ -1,3 +1,5 @@
+#!/bin/bash
+
 #
 # This script creates a new playlist in your account with all the tracks reversed.
 #
@@ -202,14 +204,16 @@ then
 	destination_playlist_description="${playlist_description} reversed"
 fi
 
+TRACKS=()
+
 #
 # get the tracks of the playlist (first 100)
 #
 response=$(curl ${CURL_OPTIONS} --header "${SPOTIFY_ACCEPT_HEADER}" --header "${spotify_authorization_header}" "${playlist_api_url}")
 checkForErrorInResponse "${response}"
-all_tracks=$(echo ${response} | jq --raw-output '.items[].track.uri')
+TRACKS_PAGE=$(echo $response | jq -c '.items[]')
+TRACKS+=($TRACKS_PAGE)
 next=$(echo ${response} | jq --raw-output '.next')
-echo -e "#retrieved tracks: $(wc -w <<< ${all_tracks})\c"
 
 ##
 # if there are more tracks (next uri != null), retrieve them
@@ -218,20 +222,28 @@ while [ "${next}" != "null" ]
 do
 	response=$(curl ${CURL_OPTIONS} --header "${SPOTIFY_ACCEPT_HEADER}" --header "${spotify_authorization_header}" "${next}")
 	checkForErrorInResponse "${response}"
-	tracks=$(echo ${response} | jq --raw-output '.items[].track.uri')
-	all_tracks="${all_tracks}
-${tracks}"
+  TRACKS_PAGE=$(echo $response | jq -c '.items[]')
+  TRACKS+=($TRACKS_PAGE)
 	next=$(echo ${response} | jq --raw-output '.next')
-	echo -e " $(wc -w <<< ${all_tracks})\c"
 done
+
+# Sort tracks by added_at in asc order
+SORTED_TRACKS=$(echo "${TRACKS[@]}" | jq -s 'sort_by(.added_at)')
+
+
+# Extract track URIs
+TRACK_URIS=$(echo $SORTED_TRACKS | jq -r '.[].track.uri' | jq -R -s -c 'split("\n")[:-1]')
+
 
 #
 # 1 track per line
 #
-all_tracks="$(echo ${all_tracks} | xargs --max-args=1)"
+all_tracks=$(printf "%s\n" $(echo $TRACK_URIS | jq -r '.[]'))
+echo "${all_tracks}"
+echo -e "#retrieved tracks: $(wc -w <<< ${all_tracks})\c"
 nr_tracks=$(wc -l <<< ${all_tracks})
-echo ""
 echo "#tracks read from playlist: ${nr_tracks}"
+echo ""
 
 #
 # filter local tracks as the API does not allow them..
@@ -261,10 +273,10 @@ destination_playlist_url=$(echo ${response} | jq --raw-output '.external_urls.sp
 echo "Created a new playlist, id: ${destination_playlist_id}"
 
 #
-# add all the tracks to the new playlist (max 100 per request)
+# add all the tracks to the new playlist (1 per request)
 #
 echo -e "Adding ${nr_tracks} tracks to the new playlist: \c"
-echo ${tracks_reversed} | xargs --no-run-if-empty --max-args=100 | while read line
+echo ${tracks_reversed} | xargs --no-run-if-empty --max-args=1 | while read line
 do
 	body=$(echo "\"${line}\"" | jq 'split(" ") as $tracks | {uris:$tracks}')
 	response=$(curl ${CURL_OPTIONS} --request POST "${SPOTIFY_API_BASE_URL}/users/${current_spotify_user_id}/playlists/${destination_playlist_id}/tracks" --header "${SPOTIFY_ACCEPT_HEADER}" --header "${SPOTIFY_CONTENT_TYPE_HEADER}" --header "${spotify_authorization_header}" --data "${body}") 
@@ -278,5 +290,3 @@ echo ""
 #
 echo ""
 echo "Finished successfully. URL of the new playlist: ${destination_playlist_url}"
-
-
